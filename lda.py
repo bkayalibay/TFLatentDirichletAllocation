@@ -31,12 +31,14 @@ import tensorflow as tf
 
 class LDA:
 
-    def __init__(self, n_docs, n_topics, n_words, tau0=1.0, kappa=0.9):
+    def __init__(self, n_docs, n_topics, n_words, tau0=1.0,
+                 kappa=0.9, local_threshold=1e-3):
         self._D = n_docs
         self._K = n_topics
         self._V = n_words
         self._tau0 = tau0
         self._kappa = kappa
+        self._local_threshold = local_threshold
         self._alloc_vars()
         self._batch_size = None
 
@@ -59,6 +61,10 @@ class LDA:
     @property
     def kappa(self):
         return self._kappa
+
+    @property
+    def local_threshold(self):
+        return self._local_threshold
 
     @property
     def alpha(self):
@@ -118,7 +124,7 @@ class LDA:
                 self.lambdas,
                 self.lambdas * (1 - self._rho) + self._rho * lambdas)
 
-    def _e_step(self, local_steps):
+    def _e_step(self, max_local_steps):
         """Do the E-step of variational EM.
 
         The E-step of LDA is:
@@ -137,20 +143,40 @@ class LDA:
                                             axis=-1,
                                             keep_dims=True)))
         exp_E_log_beta = tf.transpose(exp_E_log_beta, [1, 0])
+
+        max_steps = tf.constant(max_local_steps)
+
+        def proceed(gtm1, gt, t, _):
+            mean_change = tf.reduce_mean(tf.abs(gt - gtm1))
+            not_converged = tf.greater(mean_change, self.local_threshold)
+            not_done = tf.less(t, max_steps)
+            return tf.logical_and(not_converged, not_done)
+
         for i, d in enumerate(self._batch_data):
             g = gamma[i]
             a = alpha[i]
             exp_E_log_beta_d = tf.gather(exp_E_log_beta, d)  # N x K
-            for _ in range(local_steps):
-                phi_d = tf.ones([tf.shape(d)[0], self.K])
-                exp_E_log_theta_d = tf.exp(tf.digamma(g))  # K
-                phi_d *= exp_E_log_theta_d
-                phi_d *= exp_E_log_beta_d
+            phi_d_shape = [tf.shape(d)[0], self.K]
+
+            def body(gtm1, gt, t, phi_dtm1):
+                exp_E_log_theta_d = tf.exp(tf.digamma(gt))
+                phi_dt = tf.ones(phi_d_shape) * exp_E_log_theta_d
+                phi_dt *= exp_E_log_beta_d
                 phinorm = tf.matmul(
                     exp_E_log_beta_d,
                     tf.expand_dims(exp_E_log_theta_d, axis=-1)) + 1e-6
-                phi_d /= phinorm
-                g = a + tf.reduce_sum(phi_d, axis=0)
+                phi_dt /= phinorm
+                gtp1 = a + tf.reduce_sum(phi_dt, axis=0)
+                gtp1.set_shape([self.K])
+                phi_dt.set_shape([None, self.K])
+                return gt, gtp1, t + 1, phi_dt
+
+            zero = tf.constant(0)
+            _, g, _, phi_d = tf.while_loop(
+                cond=proceed, body=body,
+                loop_vars=[tf.zeros_like(g), g, zero,
+                           tf.ones(phi_d_shape)])
+
             new_gamma.append(g)
             phi.append(phi_d)
         gamma = tf.stack(new_gamma)
@@ -171,7 +197,7 @@ class LDA:
         return self.eta + (self.D/bs) * update
 
     def variational_em(self, data, n_update, batch_size,
-                       local_steps, use_tqdm=False):
+                       max_local_steps, use_tqdm=False):
         """Run the variational EM algorithm by alternating e_step and m_step."""
         if not use_tqdm:
             loop = range(n_update)
@@ -179,7 +205,7 @@ class LDA:
             loop = tqdm.trange(n_update)
 
         # Prepare update operation if necessary
-        self._prepare_update(batch_size, local_steps)
+        self._prepare_update(batch_size, max_local_steps)
 
         for t in loop:
             rho = np.power(t + self.tau0, -self.kappa)
