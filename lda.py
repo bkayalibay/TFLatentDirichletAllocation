@@ -194,8 +194,6 @@ class LDA:
         lambda_np = self.sess.run(self.lambdas)
         print('')
         for k, lambda_k in enumerate(lambda_np):
-            print('Topic {}'.format(k+1))
-            print('-' * 15)
             lambda_k_plus_indices = np.stack(
                 [np.arange(0, self.V), lambda_k], axis=1)
             sorted_lambda_k = sorted(
@@ -203,6 +201,5 @@ class LDA:
                 key=lambda x: x[1])
             top_N_elems = sorted_lambda_k[-top_N:]
             top_N_ix = [tup[0] for tup in top_N_elems]
-            for i in top_N_ix:
-                print(vocabulary[int(i)])
-            print('')
+            print('Topic {}: '.format(k+1) +
+                  ' '.join([vocabulary[int(i)] for i in top_N_ix[::-1]]))
