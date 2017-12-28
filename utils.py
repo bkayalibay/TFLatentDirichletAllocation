@@ -7,7 +7,7 @@ except ImportError:
 
 def subset(count_matrix, document_ids, vocabulary, year):
     doc_indices = [i for i, doc in enumerate(document_ids)
-                   if doc.startswith('2011')]
+                   if doc.startswith('2011') and count_matrix[:, i].sum() > 0]
     document_ids = [document_ids[i] for i in doc_indices]
     count_matrix = count_matrix[:, doc_indices]
     take_word = np.logical_and(
@@ -28,13 +28,16 @@ def expand_docs(count_matrix):
     return docs
 
 
-def load_data(data_dir, year='2011'):
+def load_data(data_dir, year='2011', expand=False):
     x_train, metadata = nips(data_dir)
     documents = metadata['columns']
     words = metadata['rows']
 
     count_matrix, document_ids, vocabulary = subset(
         x_train, documents, words, year=year)
-    documents = expand_docs(count_matrix)
+    if expand:
+        documents = expand_docs(count_matrix)
+    else:
+        documents = count_matrix.astype('int32')
 
     return documents, vocabulary

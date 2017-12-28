@@ -33,16 +33,16 @@ import utils
 
 class LDA:
 
-    def __init__(self, n_docs, n_topics, n_words, tau0=1.0,
-                 kappa=0.9, local_threshold=1e-3):
-        self._D = n_docs
+    def __init__(self, n_topics, vocab_size=None):
         self._K = n_topics
-        self._V = n_words
-        self._tau0 = tau0
-        self._kappa = kappa
-        self._local_threshold = local_threshold
-        self._alloc_vars()
+        self._V = vocab_size
+        self._D = None
         self._batch_size = None
+        self._eta = None
+        self._alpha = None
+        self._lambdas = None
+        self._gammas = None
+        self._sess = None
 
     @property
     def D(self):
@@ -55,18 +55,6 @@ class LDA:
     @property
     def V(self):
         return self._V
-
-    @property
-    def tau0(self):
-        return self._tau0
-
-    @property
-    def kappa(self):
-        return self._kappa
-
-    @property
-    def local_threshold(self):
-        return self._local_threshold
 
     @property
     def alpha(self):
@@ -107,11 +95,11 @@ class LDA:
         self._sess = tf.Session()
         self.sess.run(tf.global_variables_initializer())
 
-    def _prepare_update(self, batch_size, local_steps):
+    def _prepare_update(self, batch_size, local_steps, local_threshold):
         if self._batch_size != batch_size:
             if self._batch_size is not None:
                 tf.reset_default_graph()
-                self._alloc_vars()
+            self._alloc_vars()
             self._batch_size = batch_size
             self._batch_data = [tf.placeholder(
                                     dtype='int32',
@@ -120,13 +108,13 @@ class LDA:
             self._batch_indices = tf.placeholder(
                 dtype='int32', name='batch_indices')
             self._rho = tf.placeholder(dtype='float32', name='rho')
-            gammas, phi = self._e_step(local_steps)
+            gammas, phi = self._e_step(local_steps, local_threshold)
             lambdas = self._m_step(phi)
             self._update = tf.assign(
                 self.lambdas,
                 self.lambdas * (1 - self._rho) + self._rho * lambdas)
 
-    def _e_step(self, max_local_steps):
+    def _e_step(self, max_local_steps, local_threshold):
         """Do the E-step of variational EM.
 
         The E-step of LDA is:
@@ -150,7 +138,7 @@ class LDA:
 
         def proceed(gtm1, gt, t, _):
             mean_change = tf.reduce_mean(tf.abs(gt - gtm1))
-            not_converged = tf.greater(mean_change, self.local_threshold)
+            not_converged = tf.greater(mean_change, local_threshold)
             not_done = tf.less(t, max_steps)
             return tf.logical_and(not_converged, not_done)
 
@@ -199,7 +187,8 @@ class LDA:
         return self.eta + (self.D/bs) * update
 
     def variational_em(self, data, n_update, batch_size,
-                       max_local_steps, use_tqdm=False):
+                       max_local_steps=100, use_tqdm=False,
+                       tau0=1., kappa=0.9, local_threshold=1e-3):
         """Run the variational EM algorithm by alternating e_step and m_step."""
         if not use_tqdm:
             loop = range(n_update)
@@ -207,10 +196,10 @@ class LDA:
             loop = tqdm.trange(n_update)
 
         # Prepare update operation if necessary
-        self._prepare_update(batch_size, max_local_steps)
+        self._prepare_update(batch_size, max_local_steps, local_threshold)
 
         for t in loop:
-            rho = np.power(t + self.tau0, -self.kappa)
+            rho = np.power(t + tau0, -kappa)
             indices = np.random.permutation(len(data))[:batch_size]
             batch_data = [data[i] for i in indices]
             feed_dict = {
@@ -218,14 +207,40 @@ class LDA:
             feed_dict.update({self._batch_indices: indices, self._rho: rho})
             self.sess.run(self._update, feed_dict=feed_dict)
 
-    def fit(self, data, n_update, batch_size, max_local_steps,
-            use_tqdm=False, word_count_input=False):
+    def _assert_data_compatibility(self, data, word_count_input):
         if word_count_input:
+            vocab_size = data.shape[1]
             data = utils.expand_docs(data)
+        else:
+            vocab_size = np.max([d.max() for d in data]) + 1
 
+        if self.V is None:
+            self._V = vocab_size
+        elif self.V != vocab_size:
+            raise ValueError(
+                "Data vocabulary size does not match" +
+                " model's vocabulary size: {} != {}".format(self.V,
+                                                            vocab_size)
+            )
+        if self.D is None:
+            self._D = len(data)
+        elif self.D != len(data):
+            raise ValueError(
+                "Number of documents does not match" +
+                " model's number of documents: {} != {}".format(self.D,
+                                                                len(data))
+            )
+
+        return data
+
+    def fit(self, data, n_update, batch_size, max_local_steps=100,
+            tau0=1., kappa=0.9, local_threshold=1e-3,
+            use_tqdm=False, word_count_input=True):
+        data = self._assert_data_compatibility(data, word_count_input)
         self.variational_em(
             data, n_update, batch_size,
-            max_local_steps, use_tqdm)
+            max_local_steps, use_tqdm,
+            tau0, kappa, local_threshold)
 
     def list_topics(self, vocabulary, top_N=10):
         lambda_np = self.sess.run(self.lambdas)
