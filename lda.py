@@ -28,6 +28,8 @@ import tqdm
 import numpy as np
 import tensorflow as tf
 
+import utils
+
 
 class LDA:
 
@@ -215,6 +217,15 @@ class LDA:
                 bd: bd_in for bd, bd_in in zip(self._batch_data, batch_data)}
             feed_dict.update({self._batch_indices: indices, self._rho: rho})
             self.sess.run(self._update, feed_dict=feed_dict)
+
+    def fit(self, data, n_update, batch_size, max_local_steps,
+            use_tqdm=False, word_count_input=False):
+        if word_count_input:
+            data = utils.expand_docs(data)
+
+        self.variational_em(
+            data, n_update, batch_size,
+            max_local_steps, use_tqdm)
 
     def list_topics(self, vocabulary, top_N=10):
         lambda_np = self.sess.run(self.lambdas)
