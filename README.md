@@ -6,7 +6,7 @@ implementation by Matthew Hoffman as a reference. You can find it at: https://gi
 
 - [ ] add citations, reference to onlineldavb
 - [ ] add documentation
-- [ ] provide evaluation metrics like preplexity, log-likelihood, elbo
+- [ ] provide evaluation metrics like perplexity, log-likelihood, elbo
 - [x] add `LDA.fit()`, which will wrap around `LDA.variational_em()` and handle word-count matrix inputs
 - [x] use a tf loop for local steps, early stopping in case of convergence
 ### References

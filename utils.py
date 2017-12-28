@@ -7,7 +7,7 @@ except ImportError:
 
 def subset(count_matrix, document_ids, vocabulary, year):
     doc_indices = [i for i, doc in enumerate(document_ids)
-                   if doc.startswith('2011') and count_matrix[:, i].sum() > 0]
+                   if doc.startswith(year) and count_matrix[:, i].sum() > 0]
     document_ids = [document_ids[i] for i in doc_indices]
     count_matrix = count_matrix[:, doc_indices]
     take_word = np.logical_and(

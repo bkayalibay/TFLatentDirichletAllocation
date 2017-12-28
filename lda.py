@@ -27,6 +27,7 @@ Alternatively, we could also use MCMC with collapsed Gibbs sampling[3].
 import tqdm
 import numpy as np
 import tensorflow as tf
+import tensorflow.contrib.distributions as ds
 
 import utils
 
@@ -121,9 +122,12 @@ class LDA:
             \phi_{dn}^k = \exp\{E[\log \theta_{dk}] + E[\log \beta_{k, w_{dn}}]\}
             \gamma_d = \alpha + \sum_n \phi_{dn}
         """
-        init_gamma = np.random.gamma(
-            100., 1./100, (len(self._batch_data), self.K))
-        gamma = tf.convert_to_tensor(init_gamma.astype('float32'))
+        gamma_shape = (len(self._batch_data), self.K)
+        gamma_concentration = np.zeros(gamma_shape) + 100.
+        gamma_rate = np.zeros(gamma_shape) + 1./100
+        gamma = ds.Gamma(
+            gamma_concentration.astype('float32'),
+            gamma_rate.astype('float32')).sample()
         alpha = tf.gather(self.alpha, self._batch_indices)
         new_gamma = []
         phi = []
