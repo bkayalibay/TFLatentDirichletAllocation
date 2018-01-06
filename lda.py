@@ -18,11 +18,9 @@ We would like to do posterior inference of:
 
 To accomplish this, we will construct an approximate variational posterior
 and use stochastic variational inference.
-Alternatively, we could also use MCMC with collapsed Gibbs sampling[3].
 
 [1] Blei et al.; Latent Dirichlet Allocation; JMLR 2003
 [2] Hoffman et al.; Stochastic Variational Inference; JMLR 2013
-[3] Griffiths and Steyvers; Finding Scientific Topics; PNAS 2004
 """
 import tqdm
 import numpy as np
