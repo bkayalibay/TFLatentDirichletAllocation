@@ -22,12 +22,15 @@ and use stochastic variational inference.
 [1] Blei et al.; Latent Dirichlet Allocation; JMLR 2003
 [2] Hoffman et al.; Stochastic Variational Inference; JMLR 2013
 """
+import six
 import tqdm
 import numpy as np
 import tensorflow as tf
 import tensorflow.contrib.distributions as ds
 
 import utils
+
+from collections import OrderedDict
 
 
 class LDA:
@@ -94,7 +97,57 @@ class LDA:
         self._sess = tf.Session()
         self.sess.run(tf.global_variables_initializer())
 
-    def _prepare_update(self, batch_size, local_steps, local_threshold):
+    def _compute_elbo(self, gammas, phi, data):
+        self._log_lik = 0.0
+        kl_thetas = []
+        kl_zs = []
+        for i, (p, d) in enumerate(zip(phi, data)):
+            g = gammas[i]
+
+            # Data log-likelihood:
+            word_proportions = tf.gather(
+                tf.transpose(self.lambdas, [1, 0]), d)
+            word_proportions = tf.expand_dims(word_proportions, -1)
+            p = tf.expand_dims(p, 1)
+            log_lik = tf.matmul(p, tf.log(word_proportions))[:, 0, 0]
+            log_lik = tf.reduce_sum(log_lik, axis=0)
+            self._log_lik += log_lik
+
+            # KL[q(z|phi) || p(z|theta)]
+            E_log_theta = tf.digamma(g) - tf.digamma(tf.reduce_sum(g))
+            kl_z = tf.reduce_sum((tf.log(p + 1e-6) - E_log_theta) * p)
+            kl_zs.append(kl_z)
+
+            # KL[q(theta|gamma) || q(theta|alpha)]
+            a = self.alpha[i]
+            kl_theta_d = tf.lgamma(tf.reduce_sum(g))
+            kl_theta_d -= tf.reduce_sum(tf.lgamma(g))
+            kl_theta_d -= tf.lgamma(tf.reduce_sum(a))
+            kl_theta_d += tf.reduce_sum(tf.lgamma(a))
+            kl_theta_d += tf.reduce_sum((g - a) * E_log_theta)
+            kl_thetas.append(kl_theta_d)
+
+        # KL[q(beta|lambda) || p(beta|eta)]
+        E_log_beta = tf.digamma(self.lambdas)
+        E_log_beta -= tf.digamma(tf.reduce_sum(
+            self.lambdas, axis=1, keep_dims=True))
+        kl_beta = tf.lgamma(tf.reduce_sum(self.lambdas, axis=1))
+        kl_beta -= tf.reduce_sum(tf.lgamma(self.lambdas), axis=1)
+        kl_beta -= tf.lgamma(tf.reduce_sum(self.eta, axis=1))
+        kl_beta += tf.reduce_sum(tf.lgamma(self.eta), axis=1)
+        kl_beta += tf.reduce_sum((self.lambdas-self.eta)*E_log_beta, axis=1)
+        kl_beta = tf.reduce_sum(kl_beta, axis=0)
+
+        self._kl_terms = OrderedDict(
+            kl_z=tf.reduce_sum(kl_zs, axis=0),
+            kl_beta=kl_beta,
+            kl_theta=tf.reduce_sum(kl_thetas, axis=0),
+        )
+        kl_list = list(six.itervalues(self._kl_terms))
+        self._elbo = self._log_lik - tf.reduce_sum(kl_list)
+
+    def _prepare_update(self, batch_size, local_steps,
+                        local_threshold):
         if self._batch_size != batch_size:
             if self._batch_size is not None:
                 tf.reset_default_graph()
@@ -108,6 +161,9 @@ class LDA:
                 dtype='int32', name='batch_indices')
             self._rho = tf.placeholder(dtype='float32', name='rho')
             gammas, phi = self._e_step(local_steps, local_threshold)
+
+            self._compute_elbo(gammas, phi, self._batch_data)
+
             lambdas = self._m_step(phi)
             self._update = tf.assign(
                 self.lambdas,
@@ -151,7 +207,8 @@ class LDA:
             phi_d_shape = [tf.shape(d)[0], self.K]
 
             def body(gtm1, gt, t, phi_dtm1):
-                exp_E_log_theta_d = tf.exp(tf.digamma(gt))
+                exp_E_log_theta_d = tf.exp(
+                    tf.digamma(gt) - tf.digamma(tf.reduce_sum(gt)))
                 phi_dt = tf.ones(phi_d_shape) * exp_E_log_theta_d
                 phi_dt *= exp_E_log_beta_d
                 phinorm = tf.matmul(
@@ -190,7 +247,8 @@ class LDA:
 
     def variational_em(self, data, n_update, batch_size,
                        max_local_steps=100, use_tqdm=False,
-                       tau0=1., kappa=0.9, local_threshold=1e-3):
+                       tau0=1., kappa=0.9, local_threshold=1e-3,
+                       report_every=5):
         """Run the variational EM algorithm by alternating e_step and m_step."""
         if not use_tqdm:
             loop = range(n_update)
@@ -198,7 +256,11 @@ class LDA:
             loop = tqdm.trange(n_update)
 
         # Prepare update operation if necessary
-        self._prepare_update(batch_size, max_local_steps, local_threshold)
+        self._prepare_update(
+            batch_size, max_local_steps,
+            local_threshold)
+
+        losses = []
 
         for t in loop:
             rho = np.power(t + tau0, -kappa)
@@ -207,7 +269,18 @@ class LDA:
             feed_dict = {
                 bd: bd_in for bd, bd_in in zip(self._batch_data, batch_data)}
             feed_dict.update({self._batch_indices: indices, self._rho: rho})
-            self.sess.run(self._update, feed_dict=feed_dict)
+            if t % report_every == 0 and t > 0:
+                kl_list = list(six.itervalues(self._kl_terms))
+                _, elbo, ll, kl_z, kl_beta, kl_theta = self.sess.run(
+                    [self._update, self._elbo, self._log_lik] + kl_list,
+                    feed_dict=feed_dict)
+                losses.append([elbo, ll, kl_z, kl_beta, kl_theta])
+                if use_tqdm:
+                    loop.set_description('log p(x) >= {:.4f}'.format(elbo))
+            else:
+                self.sess.run(self._update, feed_dict=feed_dict)
+
+        return losses
 
     def _assert_data_compatibility(self, data, word_count_input):
         if word_count_input:
@@ -237,12 +310,14 @@ class LDA:
 
     def fit(self, data, n_update, batch_size, max_local_steps=100,
             tau0=1., kappa=0.9, local_threshold=1e-3,
-            use_tqdm=False, word_count_input=True):
+            use_tqdm=False, word_count_input=True,
+            report_every=5):
         data = self._assert_data_compatibility(data, word_count_input)
-        self.variational_em(
+        return self.variational_em(
             data, n_update, batch_size,
             max_local_steps, use_tqdm,
-            tau0, kappa, local_threshold)
+            tau0, kappa, local_threshold,
+            report_every)
 
     def list_topics(self, vocabulary, top_N=10):
         lambda_np = self.sess.run(self.lambdas)
