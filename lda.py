@@ -30,6 +30,8 @@ import tensorflow.contrib.distributions as ds
 
 import utils
 
+from collections import OrderedDict
+
 
 class LDA:
 
@@ -97,24 +99,24 @@ class LDA:
 
     def _compute_elbo(self, gammas, phi, data):
         self._log_lik = 0.0
-        kl_theta = 0.0
+        kl_thetas = []
+        kl_zs = []
         for i, (p, d) in enumerate(zip(phi, data)):
             g = gammas[i]
 
             # Data log-likelihood:
-            ws = tf.one_hot(d, depth=self.V, axis=-1)
             word_proportions = tf.gather(
-                tf.transpose(self.lambdas, [1, 0]), ws)
-            word_proportions = tf.transpose(word_proportions, [1, 0])
+                tf.transpose(self.lambdas, [1, 0]), d)
             word_proportions = tf.expand_dims(word_proportions, -1)
             p = tf.expand_dims(p, 1)
-            log_lik = tf.matmul(p, tf.log(word_proportions))
+            log_lik = tf.matmul(p, tf.log(word_proportions))[:, 0, 0]
             log_lik = tf.reduce_sum(log_lik, axis=0)
             self._log_lik += log_lik
 
             # KL[q(z|phi) || p(z|theta)]
             E_log_theta = tf.digamma(g) - tf.digamma(tf.reduce_sum(g))
-            kl_z = tf.reduce_sum((tf.log(phi) - E_log_theta) * phi)
+            kl_z = tf.reduce_sum((tf.log(p) - E_log_theta) * p)
+            kl_zs.append(kl_z)
 
             # KL[q(theta|gamma) || q(theta|alpha)]
             a = self.alpha[i]
@@ -123,11 +125,12 @@ class LDA:
             kl_theta_d -= tf.lgamma(tf.reduce_sum(a))
             kl_theta_d += tf.reduce_sum(tf.lgamma(a))
             kl_theta_d += tf.reduce_sum((g - a) * E_log_theta)
-            kl_theta += kl_theta_d
+            kl_thetas.append(kl_theta_d)
 
         # KL[q(beta|lambda) || p(beta|eta)]
         E_log_beta = tf.digamma(self.lambdas)
-        E_log_beta -= tf.digamma(tf.reduce_sum(self.lambdas, axis=1))
+        E_log_beta -= tf.digamma(tf.reduce_sum(
+            self.lambdas, axis=1, keep_dims=True))
         kl_beta = tf.lgamma(tf.reduce_sum(self.lambdas, axis=1))
         kl_beta -= tf.reduce_sum(tf.lgamma(self.lambdas), axis=1)
         kl_beta -= tf.lgamma(tf.reduce_sum(self.eta, axis=1))
@@ -135,13 +138,13 @@ class LDA:
         kl_beta += tf.reduce_sum((self.lambdas-self.eta)*E_log_beta, axis=1)
         kl_beta = tf.reduce_sum(kl_beta, axis=0)
 
-        self._kl_terms = {
-            'kl_z': kl_z,
-            'kl_beta': kl_beta,
-            'kl_theta': kl_theta
-        }
-        self._elbo = self._log_lik - \
-            tf.reduce_sum(six.itervalues(self._kl_terms))
+        self._kl_terms = OrderedDict(
+            kl_z=tf.reduce_sum(kl_zs, axis=0),
+            kl_beta=kl_beta,
+            kl_theta=tf.reduce_sum(kl_thetas, axis=0),
+        )
+        kl_list = list(six.itervalues(self._kl_terms))
+        self._elbo = self._log_lik - tf.reduce_sum(kl_list)
 
     def _prepare_update(self, batch_size, local_steps,
                         local_threshold):
@@ -244,7 +247,8 @@ class LDA:
 
     def variational_em(self, data, n_update, batch_size,
                        max_local_steps=100, use_tqdm=False,
-                       tau0=1., kappa=0.9, local_threshold=1e-3):
+                       tau0=1., kappa=0.9, local_threshold=1e-3,
+                       report_every=5):
         """Run the variational EM algorithm by alternating e_step and m_step."""
         if not use_tqdm:
             loop = range(n_update)
@@ -265,12 +269,17 @@ class LDA:
             feed_dict = {
                 bd: bd_in for bd, bd_in in zip(self._batch_data, batch_data)}
             feed_dict.update({self._batch_indices: indices, self._rho: rho})
-            _, elbo = self.sess.run(
-                [self._update, self._elbo],
-                feed_dict=feed_dict)
-            bounds.append(elbo)
-            if use_tqdm:
-                loop.set_description('log p(x) >= {:.4f}'.format(elbo))
+            if t % report_every == 0 and t > 0:
+                kl_list = list(six.itervalues(self._kl_terms))
+                _, elbo, ll, kl_z, kl_beta, kl_theta = self.sess.run(
+                    [self._update, self._elbo, self._log_lik] + kl_list,
+                    feed_dict=feed_dict)
+                bounds.append(elbo)
+                #print([elbo, ll, kl_z, kl_beta, kl_theta])
+                if use_tqdm:
+                    loop.set_description('log p(x) >= {:.4f}'.format(elbo))
+            else:
+                self.sess.run(self._update, feed_dict=feed_dict)
 
         return bounds
 
@@ -302,12 +311,14 @@ class LDA:
 
     def fit(self, data, n_update, batch_size, max_local_steps=100,
             tau0=1., kappa=0.9, local_threshold=1e-3,
-            use_tqdm=False, word_count_input=True):
+            use_tqdm=False, word_count_input=True,
+            report_every=5):
         data = self._assert_data_compatibility(data, word_count_input)
         return self.variational_em(
             data, n_update, batch_size,
             max_local_steps, use_tqdm,
-            tau0, kappa, local_threshold)
+            tau0, kappa, local_threshold,
+            report_every)
 
     def list_topics(self, vocabulary, top_N=10):
         lambda_np = self.sess.run(self.lambdas)
