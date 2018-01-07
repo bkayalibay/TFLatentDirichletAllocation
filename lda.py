@@ -22,6 +22,7 @@ and use stochastic variational inference.
 [1] Blei et al.; Latent Dirichlet Allocation; JMLR 2003
 [2] Hoffman et al.; Stochastic Variational Inference; JMLR 2013
 """
+import six
 import tqdm
 import numpy as np
 import tensorflow as tf
@@ -96,8 +97,7 @@ class LDA:
 
     def _compute_elbo(self, gammas, phi, data):
         self._log_lik = 0.0
-        self._kl_terms = 0.0
-
+        kl_theta = 0.0
         for i, (p, d) in enumerate(zip(phi, data)):
             g = gammas[i]
 
@@ -112,9 +112,36 @@ class LDA:
             log_lik = tf.reduce_sum(log_lik, axis=0)
             self._log_lik += log_lik
 
-            # TODO: KL-terms
+            # KL[q(z|phi) || p(z|theta)]
+            E_log_theta = tf.digamma(g) - tf.digamma(tf.reduce_sum(g))
+            kl_z = tf.reduce_sum((tf.log(phi) - E_log_theta) * phi)
 
-        self._elbo = self._log_lik + self._kl_terms
+            # KL[q(theta|gamma) || q(theta|alpha)]
+            a = self.alpha[i]
+            kl_theta_d = tf.lgamma(tf.reduce_sum(g))
+            kl_theta_d -= tf.reduce_sum(tf.lgamma(g))
+            kl_theta_d -= tf.lgamma(tf.reduce_sum(a))
+            kl_theta_d += tf.reduce_sum(tf.lgamma(a))
+            kl_theta_d += tf.reduce_sum((g - a) * E_log_theta)
+            kl_theta += kl_theta_d
+
+        # KL[q(beta|lambda) || p(beta|eta)]
+        E_log_beta = tf.digamma(self.lambdas)
+        E_log_beta -= tf.digamma(tf.reduce_sum(self.lambdas, axis=1))
+        kl_beta = tf.lgamma(tf.reduce_sum(self.lambdas, axis=1))
+        kl_beta -= tf.reduce_sum(tf.lgamma(self.lambdas), axis=1)
+        kl_beta -= tf.lgamma(tf.reduce_sum(self.eta, axis=1))
+        kl_beta += tf.reduce_sum(tf.lgamma(self.eta), axis=1)
+        kl_beta += tf.reduce_sum((self.lambdas-self.eta)*E_log_beta, axis=1)
+        kl_beta = tf.reduce_sum(kl_beta, axis=0)
+
+        self._kl_terms = {
+            'kl_z': kl_z,
+            'kl_beta': kl_beta,
+            'kl_theta': kl_theta
+        }
+        self._elbo = self._log_lik - \
+            tf.reduce_sum(six.itervalues(self._kl_terms))
 
     def _prepare_update(self, batch_size, local_steps,
                         local_threshold):
@@ -177,7 +204,8 @@ class LDA:
             phi_d_shape = [tf.shape(d)[0], self.K]
 
             def body(gtm1, gt, t, phi_dtm1):
-                exp_E_log_theta_d = tf.exp(tf.digamma(gt))
+                exp_E_log_theta_d = tf.exp(
+                    tf.digamma(gt) - tf.digamma(tf.reduce_sum(gt)))
                 phi_dt = tf.ones(phi_d_shape) * exp_E_log_theta_d
                 phi_dt *= exp_E_log_beta_d
                 phinorm = tf.matmul(
