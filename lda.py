@@ -94,7 +94,30 @@ class LDA:
         self._sess = tf.Session()
         self.sess.run(tf.global_variables_initializer())
 
-    def _prepare_update(self, batch_size, local_steps, local_threshold):
+    def _compute_elbo(self, gammas, phi, data):
+        self._log_lik = 0.0
+        self._kl_terms = 0.0
+
+        for i, (p, d) in enumerate(zip(phi, data)):
+            g = gammas[i]
+
+            # Data log-likelihood:
+            ws = tf.one_hot(d, depth=self.V, axis=-1)
+            word_proportions = tf.gather(
+                tf.transpose(self.lambdas, [1, 0]), ws)
+            word_proportions = tf.transpose(word_proportions, [1, 0])
+            word_proportions = tf.expand_dims(word_proportions, -1)
+            p = tf.expand_dims(p, 1)
+            log_lik = tf.matmul(p, tf.log(word_proportions))
+            log_lik = tf.reduce_sum(log_lik, axis=0)
+            self._log_lik += log_lik
+
+            # TODO: KL-terms
+
+        self._elbo = self._log_lik + self._kl_terms
+
+    def _prepare_update(self, batch_size, local_steps,
+                        local_threshold):
         if self._batch_size != batch_size:
             if self._batch_size is not None:
                 tf.reset_default_graph()
@@ -108,6 +131,9 @@ class LDA:
                 dtype='int32', name='batch_indices')
             self._rho = tf.placeholder(dtype='float32', name='rho')
             gammas, phi = self._e_step(local_steps, local_threshold)
+
+            self._compute_elbo(gammas, phi, self._batch_data)
+
             lambdas = self._m_step(phi)
             self._update = tf.assign(
                 self.lambdas,
@@ -198,7 +224,11 @@ class LDA:
             loop = tqdm.trange(n_update)
 
         # Prepare update operation if necessary
-        self._prepare_update(batch_size, max_local_steps, local_threshold)
+        self._prepare_update(
+            batch_size, max_local_steps,
+            local_threshold)
+
+        bounds = []
 
         for t in loop:
             rho = np.power(t + tau0, -kappa)
@@ -207,7 +237,14 @@ class LDA:
             feed_dict = {
                 bd: bd_in for bd, bd_in in zip(self._batch_data, batch_data)}
             feed_dict.update({self._batch_indices: indices, self._rho: rho})
-            self.sess.run(self._update, feed_dict=feed_dict)
+            _, elbo = self.sess.run(
+                [self._update, self._elbo],
+                feed_dict=feed_dict)
+            bounds.append(elbo)
+            if use_tqdm:
+                loop.set_description('log p(x) >= {:.4f}'.format(elbo))
+
+        return bounds
 
     def _assert_data_compatibility(self, data, word_count_input):
         if word_count_input:
@@ -239,7 +276,7 @@ class LDA:
             tau0=1., kappa=0.9, local_threshold=1e-3,
             use_tqdm=False, word_count_input=True):
         data = self._assert_data_compatibility(data, word_count_input)
-        self.variational_em(
+        return self.variational_em(
             data, n_update, batch_size,
             max_local_steps, use_tqdm,
             tau0, kappa, local_threshold)
