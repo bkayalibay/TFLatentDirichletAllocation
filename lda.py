@@ -115,7 +115,7 @@ class LDA:
 
             # KL[q(z|phi) || p(z|theta)]
             E_log_theta = tf.digamma(g) - tf.digamma(tf.reduce_sum(g))
-            kl_z = tf.reduce_sum((tf.log(p) - E_log_theta) * p)
+            kl_z = tf.reduce_sum((tf.log(p + 1e-6) - E_log_theta) * p)
             kl_zs.append(kl_z)
 
             # KL[q(theta|gamma) || q(theta|alpha)]
@@ -260,7 +260,7 @@ class LDA:
             batch_size, max_local_steps,
             local_threshold)
 
-        bounds = []
+        losses = []
 
         for t in loop:
             rho = np.power(t + tau0, -kappa)
@@ -274,14 +274,13 @@ class LDA:
                 _, elbo, ll, kl_z, kl_beta, kl_theta = self.sess.run(
                     [self._update, self._elbo, self._log_lik] + kl_list,
                     feed_dict=feed_dict)
-                bounds.append(elbo)
-                #print([elbo, ll, kl_z, kl_beta, kl_theta])
+                losses.append([elbo, ll, kl_z, kl_beta, kl_theta])
                 if use_tqdm:
                     loop.set_description('log p(x) >= {:.4f}'.format(elbo))
             else:
                 self.sess.run(self._update, feed_dict=feed_dict)
 
-        return bounds
+        return losses
 
     def _assert_data_compatibility(self, data, word_count_input):
         if word_count_input:
