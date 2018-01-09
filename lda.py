@@ -22,15 +22,19 @@ and use stochastic variational inference.
 [1] Blei et al.; Latent Dirichlet Allocation; JMLR 2003
 [2] Hoffman et al.; Stochastic Variational Inference; JMLR 2013
 """
+from collections import OrderedDict
 import six
-import tqdm
 import numpy as np
 import tensorflow as tf
 import tensorflow.contrib.distributions as ds
 
 import utils
 
-from collections import OrderedDict
+try:
+    import tqdm
+    TQDM_AVAILABLE = True
+except ImportError:
+    TQDM_AVAILABLE = False
 
 
 class LDA:
@@ -256,7 +260,11 @@ class LDA:
         if not use_tqdm:
             loop = range(n_update)
         else:
-            loop = tqdm.trange(n_update)
+            if not TQDM_AVAILABLE:
+                print('tqdm not found. Please install tqdm: pip install tqdm')
+                loop = range(n_update)
+            else:
+                loop = tqdm.trange(n_update)
 
         # Prepare update operation if necessary
         self._prepare_update(
@@ -278,7 +286,7 @@ class LDA:
                     [self._update, self._elbo, self._log_lik] + kl_list,
                     feed_dict=feed_dict)
                 losses.append([elbo, ll, kl_z, kl_beta, kl_theta])
-                if use_tqdm:
+                if use_tqdm and TQDM_AVAILABLE:
                     loop.set_description('log p(x) >= {:.4f}'.format(elbo))
             else:
                 self.sess.run(self._update, feed_dict=feed_dict)
