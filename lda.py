@@ -105,8 +105,10 @@ class LDA:
             g = gammas[i]
 
             # Data log-likelihood:
+            lambdas = tf.nn.softmax(self.lambdas)
+            lambdas = tf.clip_by_value(lambdas, 1e-2, 1-1e-2)
             word_proportions = tf.gather(
-                tf.transpose(self.lambdas, [1, 0]), d)
+                tf.transpose(lambdas, [1, 0]), d)
             word_proportions = tf.expand_dims(word_proportions, -1)
             p = tf.expand_dims(p, 1)
             log_lik = tf.matmul(p, tf.log(word_proportions))[:, 0, 0]
@@ -115,7 +117,8 @@ class LDA:
 
             # KL[q(z|phi) || p(z|theta)]
             E_log_theta = tf.digamma(g) - tf.digamma(tf.reduce_sum(g))
-            kl_z = tf.reduce_sum((tf.log(p + 1e-6) - E_log_theta) * p)
+            p = tf.clip_by_value(p, 1e-3, 1 - 1e-3)
+            kl_z = tf.reduce_sum((tf.log(p) - E_log_theta) * p)
             kl_zs.append(kl_z)
 
             # KL[q(theta|gamma) || q(theta|alpha)]
