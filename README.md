@@ -2,7 +2,7 @@
 ### Introduction
 This repository contains a tensorflow implementation of LDA as described in [1]. I used the numpy
 implementation by Matthew Hoffman as a reference. You can find it at: https://github.com/blei-lab/onlineldavb.
-I wrote this mainly to educate myself on LDA, which means there are probably some errors lurking in the code.
+I wrote this mainly to educate myself on LDA, which means there might be some logic errors and/or bugs lurking in the code.
 ### TODOs
 - [x] add citations, reference to onlineldavb
 - [ ] add documentation
