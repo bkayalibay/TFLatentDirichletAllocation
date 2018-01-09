@@ -10,5 +10,11 @@ I wrote this mainly to educate myself on LDA, which means there might be some lo
 - [ ] consider using sparse tensors to represent documents
 - [x] add `LDA.fit()`, which will wrap around `LDA.variational_em()` and handle word-count matrix inputs
 - [x] use a tf loop for local steps, early stopping in case of convergence
+### Requirements
+- numpy
+- tensorflow
+- matplotlib (for the notebook)
+- tqdm (if you want to monitor progress)
+- [observations](https://github.com/edwardlib/observations) (for the notebook)
 ### References
 1. Hoffman et al.; [Stochastic Variational Inference](http://jmlr.org/papers/v14/hoffman13a.html); Journal of Machine Learning Research; pages 1303-1347; 2013
